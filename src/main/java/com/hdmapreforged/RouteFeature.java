@@ -713,7 +713,7 @@ public final class RouteFeature implements TourPanel.Actions {
         Color walked = beside ? Color.WHITE : PlayerMarker.YELLOW;
         // Its teleports and transports as it told them, and the walks between them as found here on foot.
         for (var walk : spWalks) {
-            shadowed(g, path(p, walk), 2.5f, beside ? new float[]{6f, 5f} : null, walked);
+            shadowed(g, path(p, walk, false), 2.5f, beside ? new float[]{6f, 5f} : null, walked);
         }
         for (var j : spJumps) {
             if (p.shows(j.from) && p.shows(j.to)) {
@@ -1291,6 +1291,10 @@ public final class RouteFeature implements TourPanel.Actions {
             // Sent after all: as it is.
             bankShut = false;
             rememberBank(items);
+            return;
+        }
+        // Only what one carries and wears counts; shops, the Grand Exchange and trades send theirs each change.
+        if (event.getContainerId() != InventoryID.INV && event.getContainerId() != InventoryID.WORN) {
             return;
         }
         var before = state;
@@ -3479,11 +3483,13 @@ public final class RouteFeature implements TourPanel.Actions {
         static final Color OUTLINE = new Color(0, 0, 0, 140);
 
         static void paint(Graphics2D g, Projection p, Route route, Color walk, Color jump) {
-            float width = (float) max(2.5, min(6, pow(2, p.zoom()) / 2));
-            Stroke solid = new BasicStroke(width, CAP_ROUND, JOIN_ROUND);
-            Stroke dashed = new BasicStroke(max(2f, width - 1), CAP_ROUND, JOIN_ROUND, 1,
-                new float[]{7, 6}, 0);
-            Stroke outline = new BasicStroke(width + 2.5f, CAP_ROUND, JOIN_ROUND);
+            // In quarter pixels, so a zoom's strokes are made once rather than three every frame.
+            float width = round(4 * max(2.5, min(6, pow(2, p.zoom()) / 2))) / 4f;
+            Stroke[] strokes = STROKES.computeIfAbsent(width, w -> new Stroke[]{
+                new BasicStroke(w, CAP_ROUND, JOIN_ROUND),
+                new BasicStroke(max(2f, w - 1), CAP_ROUND, JOIN_ROUND, 1, new float[]{7, 6}, 0),
+                new BasicStroke(w + 2.5f, CAP_ROUND, JOIN_ROUND)});
+            Stroke solid = strokes[0], dashed = strokes[1], outline = strokes[2];
             int blocked = blockedFrom(route);
             for (int index = 0; index < route.steps.size(); index++) {
                 Step step = route.steps.get(index);
@@ -3507,7 +3513,7 @@ public final class RouteFeature implements TourPanel.Actions {
                     }
                     continue;
                 }
-                var line = path(p, step.points);
+                var line = path(p, step.points, true);
                 g.setStroke(outline);
                 g.setColor(OUTLINE);
                 g.draw(line);
@@ -3538,20 +3544,57 @@ public final class RouteFeature implements TourPanel.Actions {
             }
         }
 
-        /** The points' line where shown, broken where not. */
-        static Path2D path(Projection p, int[] points) {
+        static final Map<Float, Stroke[]> STROKES = new ConcurrentHashMap<>();
+        /** Off screen by more than this, a line's round caps and outline no longer reach in. */
+        static final double MARGIN = 16;
+
+        /**
+         * The points' line where shown, broken where not; a point less than a pixel from the one before is left out,
+         * as zoomed out a long route has thousands. With {@code cull}, also broken where it runs off screen, which a
+         * dashed line must not be: its dashes would move as the map is dragged.
+         */
+        static Path2D path(Projection p, int[] points, boolean cull) {
             var line = new Path2D.Double();
-            boolean drawing = false;
             var at = drawn(p, points);
+            double left = -MARGIN, top = -MARGIN, right = p.width() + MARGIN, bottom = p.height() + MARGIN;
+            // The point before, if shown; the last one put in the line, and whether the point before was left out.
+            boolean before = false, open = false, skipped = false;
+            double bx = 0, by = 0, lx = 0, ly = 0;
             for (int i = 0; i < at.length; i += 3) {
                 if (!shown(p, at, i)) {
-                    drawing = false;
-                } else if (drawing) {
-                    line.lineTo(p.screenX(at[i]), p.screenY(at[i + 1]));
-                } else {
-                    line.moveTo(p.screenX(at[i]), p.screenY(at[i + 1]));
-                    drawing = true;
+                    if (skipped) {
+                        line.lineTo(bx, by);
+                    }
+                    before = open = skipped = false;
+                    continue;
                 }
+                double x = p.screenX(at[i]), y = p.screenY(at[i + 1]);
+                if (before && cull && (x < left && bx < left || x > right && bx > right
+                    || y < top && by < top || y > bottom && by > bottom)) {
+                    if (skipped) {
+                        line.lineTo(bx, by);
+                    }
+                    open = skipped = false;
+                } else if (before) {
+                    if (!open) {
+                        line.moveTo(bx, by);
+                        lx = bx;
+                        ly = by;
+                        open = true;
+                    }
+                    skipped = abs(x - lx) < 1 && abs(y - ly) < 1;
+                    if (!skipped) {
+                        line.lineTo(x, y);
+                        lx = x;
+                        ly = y;
+                    }
+                }
+                bx = x;
+                by = y;
+                before = true;
+            }
+            if (skipped) {
+                line.lineTo(bx, by);
             }
             return line;
         }

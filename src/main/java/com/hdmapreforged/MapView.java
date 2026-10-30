@@ -1279,25 +1279,51 @@ final class MapView extends JComponent implements Projection {
      * selected's group), once per change of those rather than for every place every frame. */
     List<Poi> candidates = List.of();
     List<Object> candidatesFor;
+    final Set<Poi> candidateSet = Collections.newSetFromMap(new IdentityHashMap<>());
+    /** The candidates with a hovered icon they lack (one of another layer's), in their order so no cell changes hands. */
+    List<Poi> withHovered = List.of();
+    Poi withHoveredFor;
+    List<Poi> withHoveredFrom;
 
     List<Poi> candidates() {
-        var key = Arrays.asList(pois, hidden, unlocks, iconsOff, map, plane, targetZoom, filter.onlyUsable, selected, hovered);
+        // Not keyed on the hovered icon: sweeping the mouse over icons would filter every place again each time.
+        var key = Arrays.asList(pois, hidden, unlocks, iconsOff, map, plane, targetZoom, filter.onlyUsable, selected);
         if (!key.equals(candidatesFor)) {
             candidatesFor = key;
             candidates = new ArrayList<>();
+            candidateSet.clear();
             for (var poi : pois) {
-                var at = hidden.contains(poi) && poi != selected || !poi.isOn(map) ? null : shownCached(poi);
-                if (at != null && (poi == selected || poi == hovered || inGroup(poi)
+                var at = shownHere(poi);
+                if (at != null && (poi == selected || inGroup(poi)
                     // Other floors' icons show (faded) above ground when zoomed in, and where the game's map draws a
                     // place's floors flat (Keldagrim's houses); elsewhere underground, floors on one spot are different
                     // places. Further out they crowd the floor in view.
                     || visible(poi, filter) && (at.getPlane() == plane || targetZoom >= 2 && (at.getY() < UNDERGROUND_Y
                     || at.getPlane() < floorsDrawnFlat(poi.map.id, at.getX(), at.getY()))))) {
                     candidates.add(poi);
+                    candidateSet.add(poi);
                 }
             }
         }
-        return candidates;
+        if (hovered == null || candidateSet.contains(hovered) || shownHere(hovered) == null) {
+            return candidates;
+        }
+        if (hovered != withHoveredFor || candidates != withHoveredFrom) {
+            withHoveredFor = hovered;
+            withHoveredFrom = candidates;
+            withHovered = new ArrayList<>(candidates.size() + 1);
+            for (var poi : pois) {
+                if (poi == hovered || candidateSet.contains(poi)) {
+                    withHovered.add(poi);
+                }
+            }
+        }
+        return withHovered;
+    }
+
+    /** Where a place shows on the map in view, or null: hidden (unless selected) or on another map. */
+    WorldPoint shownHere(Poi poi) {
+        return hidden.contains(poi) && poi != selected || !poi.isOn(map) ? null : shownCached(poi);
     }
 
     /** The selected, hovered and group icons, in a second pass over the overlays (the game's icons) so none covers them. */
