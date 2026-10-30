@@ -713,7 +713,7 @@ public final class RouteFeature implements TourPanel.Actions {
         Color walked = beside ? Color.WHITE : PlayerMarker.YELLOW;
         // Its teleports and transports as it told them, and the walks between them as found here on foot.
         for (var walk : spWalks) {
-            shadowed(g, path(p, walk, false), 2.5f, beside ? new float[]{6f, 5f} : null, walked);
+            shadowed(g, path(p, walk), 2.5f, beside ? new float[]{6f, 5f} : null, walked);
         }
         for (var j : spJumps) {
             if (p.shows(j.from) && p.shows(j.to)) {
@@ -3513,7 +3513,7 @@ public final class RouteFeature implements TourPanel.Actions {
                     }
                     continue;
                 }
-                var line = path(p, step.points, true);
+                var line = path(p, step.points);
                 g.setStroke(outline);
                 g.setColor(OUTLINE);
                 g.draw(line);
@@ -3545,56 +3545,41 @@ public final class RouteFeature implements TourPanel.Actions {
         }
 
         static final Map<Float, Stroke[]> STROKES = new ConcurrentHashMap<>();
-        /** Off screen by more than this, a line's round caps and outline no longer reach in. */
-        static final double MARGIN = 16;
 
         /**
-         * The points' line where shown, broken where not; a point less than a pixel from the one before is left out,
-         * as zoomed out a long route has thousands. With {@code cull}, also broken where it runs off screen, which a
-         * dashed line must not be: its dashes would move as the map is dragged.
+         * The points' line where shown, broken where not; a point less than a pixel from the last one drawn is left out
+         * (zoomed out a long route has thousands), the last of a stretch never.
          */
-        static Path2D path(Projection p, int[] points, boolean cull) {
+        static Path2D path(Projection p, int[] points) {
             var line = new Path2D.Double();
+            boolean drawing = false, skipped = false;
+            double x = 0, y = 0, lastX = 0, lastY = 0;
             var at = drawn(p, points);
-            double left = -MARGIN, top = -MARGIN, right = p.width() + MARGIN, bottom = p.height() + MARGIN;
-            // The point before, if shown; the last one put in the line, and whether the point before was left out.
-            boolean before = false, open = false, skipped = false;
-            double bx = 0, by = 0, lx = 0, ly = 0;
             for (int i = 0; i < at.length; i += 3) {
                 if (!shown(p, at, i)) {
                     if (skipped) {
-                        line.lineTo(bx, by);
+                        line.lineTo(x, y);
                     }
-                    before = open = skipped = false;
+                    drawing = skipped = false;
                     continue;
                 }
-                double x = p.screenX(at[i]), y = p.screenY(at[i + 1]);
-                if (before && cull && (x < left && bx < left || x > right && bx > right
-                    || y < top && by < top || y > bottom && by > bottom)) {
-                    if (skipped) {
-                        line.lineTo(bx, by);
-                    }
-                    open = skipped = false;
-                } else if (before) {
-                    if (!open) {
-                        line.moveTo(bx, by);
-                        lx = bx;
-                        ly = by;
-                        open = true;
-                    }
-                    skipped = abs(x - lx) < 1 && abs(y - ly) < 1;
-                    if (!skipped) {
-                        line.lineTo(x, y);
-                        lx = x;
-                        ly = y;
-                    }
+                x = p.screenX(at[i]);
+                y = p.screenY(at[i + 1]);
+                skipped = drawing && abs(x - lastX) < 1 && abs(y - lastY) < 1;
+                if (skipped) {
+                    continue;
                 }
-                bx = x;
-                by = y;
-                before = true;
+                if (drawing) {
+                    line.lineTo(x, y);
+                } else {
+                    line.moveTo(x, y);
+                    drawing = true;
+                }
+                lastX = x;
+                lastY = y;
             }
             if (skipped) {
-                line.lineTo(bx, by);
+                line.lineTo(x, y);
             }
             return line;
         }
